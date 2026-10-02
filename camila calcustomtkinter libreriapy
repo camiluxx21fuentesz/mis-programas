@@ -1,0 +1,328 @@
+
+import math
+
+import customtkinter as ctk
+
+
+class Calculo:
+    """La logica de la calculadora, sin dependencias de la ventana."""
+
+    SIMBOLOS = {"+": "+", "-": "-", "*": "\u00d7", "/": "\u00f7"}
+    MAX_HISTORIAL = 5
+
+    def __init__(self):
+        self.actual = "0"      # el numero que se esta escribiendo
+        self.anterior = None   # operando izquierdo
+        self.operador = None   # + - * /
+        self.reiniciar = False # el proximo digito empieza un numero nuevo
+        self.error = None
+        self.vista = None      # texto a mostrar con el operador pendiente
+        self.historial = []    # ultimas operaciones, la mas reciente al final
+
+    @property
+    def texto(self):
+        if self.error:
+            return self.error
+        return self.actual if self.vista is None else self.vista
+
+    @property
+    def historial_texto(self):
+        """Historial para pintar, con la operacion mas reciente arriba."""
+        return "\n".join(reversed(self.historial))
+
+    def escribir(self, n):
+        if n not in "0123456789." or not n:
+            return self
+        if self.error:
+            self.limpiar()
+        self.vista = None
+        if self.reiniciar or (self.actual == "0" and n != "."):
+            self.actual = n
+            self.reiniciar = False
+        elif n == "." and "." in self.actual:
+            return self
+        else:
+            self.actual += n
+        return self
+
+    def calc(self, op):
+        if self.error:
+            return self
+        self.vista = None
+        if self.operador is not None and not self.reiniciar:
+            if not self.calcular():
+                return self
+        self.anterior = float(self.actual)
+        self.operador = op
+        self.reiniciar = True
+        self.vista = self.redondear(self.anterior) + " " + self.SIMBOLOS[op]
+        return self
+
+    def calcular(self):
+        """Ejecuta la operacion pendiente. Devuelve False si hubo error."""
+        if self.anterior is None or self.operador is None:
+            return True
+
+        b = float(self.actual)
+        op = self.operador
+        a = self.anterior
+        self.anterior = None
+        self.operador = None
+
+        if op == "/" and b == 0:
+            self.error = "!ERROR! No se puede dividir entre 0"
+            return False
+
+        try:
+            if op == "+":
+                r = a + b
+            elif op == "-":
+                r = a - b
+            elif op == "*":
+                r = a * b
+            else:
+                r = a / b
+            self.actual = self.redondear(r)
+        except (ValueError, ZeroDivisionError, OverflowError):
+            self.error = "!ERROR! Operacion no valida"
+            return False
+        self.anotar(a, op, b)
+        return True
+
+    def anotar(self, a, op, b):
+        """Guarda la operacion en el historial, dejando las ultimas 5."""
+        self.historial.append(
+            "{} {} {} = {}".format(
+                self.redondear(a), self.SIMBOLOS[op], self.redondear(b), self.actual
+            )
+        )
+        del self.historial[: -self.MAX_HISTORIAL]
+
+    def resultado(self):
+        if self.error:
+            return self
+        self.vista = None
+        self.calcular()
+        self.reiniciar = True
+        return self
+
+    def raiz(self):
+        return self.aplicar(
+            math.sqrt, "!ERROR! Raiz de numero negativo", solo_positivo=True
+        )
+
+    def porcentaje(self):
+        return self.aplicar(lambda n: n / 100)
+
+    def signo(self):
+        return self.aplicar(lambda n: -n)
+
+    def aplicar(self, f, mensaje_error=None, solo_positivo=False):
+        """Aplica f al numero actual, con guarda de errores."""
+        if self.error:
+            return self
+        try:
+            n = float(self.actual)
+        except ValueError:
+            self.error = "!ERROR! Numero no valido"
+            return self
+        if solo_positivo and n < 0:
+            self.error = mensaje_error
+            return self
+        try:
+            self.actual = self.redondear(f(n))
+        except (ValueError, OverflowError):
+            self.error = mensaje_error or "!ERROR! Resultado no valido"
+            return self
+        self.vista = None
+        self.reiniciar = True
+        return self
+
+    def borrar(self):
+        if self.error:
+            return self.limpiar()
+        if self.vista is not None:
+            self.vista = None
+            return self
+        self.actual = self.actual[:-1] if len(self.actual) > 1 else "0"
+        if self.actual in ("", "-", "."):
+            self.actual = "0"
+        return self
+
+    def limpiar(self):
+        """Borra la cuenta en curso. El historial se conserva."""
+        historial = self.historial
+        self.__init__()
+        self.historial = historial
+        return self
+
+    def borrar_historial(self):
+        """Vacia el historial de operaciones."""
+        self.historial = []
+        return self
+
+    @staticmethod
+    def redondear(n):
+        if not math.isfinite(n):
+            raise ValueError("resultado infinito")
+        r = round(n, 10)
+        return str(int(r)) if r == int(r) else str(r)
+
+
+class Calculadora(ctk.CTk):
+    """La ventana. Los botones solo delegan en Calculo."""
+
+    ESTILOS = {
+        "num":     ("#ff9ce0", "#7b1fa2", "#4a148c"),
+        "op":      ("#ab47bc", "#9575cd", "#ffffff"),
+        "igual":   ("#6a1b9a", "#4a148c", "#ffffff"),
+        "limpiar": ("#e91e63", "#c2185b", "#ffffff"),
+    }
+
+    def __init__(self):
+        ctk.set_appearance_mode("Light")
+        ctk.set_default_color_theme("blue")  # el color lo pongo yo en ESTILOS
+
+        super().__init__()
+        self.logica = Calculo()
+
+        self.title("Calculadora Rosa & Morada")
+        self.geometry("340x620")
+        self.resizable(False, False)
+        self.configure(fg_color="#c77dff")
+
+        marco = ctk.CTkFrame(self, fg_color="#f7e6ff", corner_radius=20)
+        marco.pack(fill="both", expand=True, padx=14, pady=14)
+
+        ctk.CTkLabel(
+            marco,
+            text="Calculadora Rosa & Morada",
+            font=ctk.CTkFont(size=17, weight="bold"),
+            text_color="#8e24aa",
+        ).pack(pady=(14, 8))
+
+        self.pantalla = ctk.CTkLabel(
+            marco,
+            text="0",
+            font=ctk.CTkFont(family="Consolas", size=26, weight="bold"),
+            fg_color="#7b1fa2",
+            text_color="#ffe6f5",
+            anchor="e",
+            corner_radius=14,
+            height=64,
+        )
+        self.pantalla.pack(fill="x", padx=14)
+
+        self.historial = ctk.CTkLabel(
+            marco,
+            text="",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color="transparent",
+            text_color="#9575cd",
+            anchor="e",
+            justify="right",
+            height=Calculo.MAX_HISTORIAL * 20,
+        )
+        self.historial.pack(fill="x", padx=18, pady=(8, 4))
+
+        teclado = ctk.CTkFrame(marco, fg_color="transparent")
+        teclado.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        C = self.logica
+        d = self.digito
+        o = self.op
+        filas = [
+            [("AC", self.ac, "limpiar"), ("\u221a", C.raiz, "op"), ("%", C.porcentaje, "op")],
+            [("7", d("7"), "num"), ("8", d("8"), "num"), ("9", d("9"), "num")],
+            [("4", d("4"), "num"), ("5", d("5"), "num"), ("6", d("6"), "num")],
+            [("1", d("1"), "num"), ("2", d("2"), "num"), ("3", d("3"), "num")],
+            [("0", d("0"), "num"), (".", d("."), "num"), ("\u00b1", C.signo, "op")],
+            [("\u00f7", o("/"), "op"), ("\u00d7", o("*"), "op"), ("+", o("+"), "op")],
+            [("\u2212", o("-"), "op"), ("C", self.c, "limpiar"), ("=", C.resultado, "igual")],
+        ]
+
+        for fila in filas:
+            f = ctk.CTkFrame(teclado, fg_color="transparent")
+            f.pack(fill="x", pady=3)
+            for texto, accion, estilo in fila:
+                color, hover, tinta = self.ESTILOS[estilo]
+                ctk.CTkButton(
+                    f,
+                    text=texto,
+                    command=accion,
+                    width=88,
+                    height=48,
+                    corner_radius=12,
+                    fg_color=color,
+                    hover_color=hover,
+                    text_color=tinta,
+                    font=ctk.CTkFont(size=17, weight="bold"),
+                    cursor="hand2",
+                ).pack(side="left", expand=True, padx=3)
+
+        self.pintar()
+        self.bind("<Key>", self.pulsar_tecla)
+
+    # --- puente boton -> logica, repintando despues ---
+
+    def _accion(self, f):
+        """Envolve f para ejecutar el repintado al terminar."""
+        def correr():
+            f()
+            self.pintar()
+        return correr
+
+    def digito(self, n):
+        return self._accion(lambda: self.logica.escribir(n))
+
+    def op(self, simbolo):
+        return self._accion(lambda: self.logica.calc(simbolo))
+
+    def c(self):
+        self.logica.limpiar()
+        self.pintar()
+
+    def ac(self):
+        self.logica.limpiar().borrar_historial()
+        self.pintar()
+
+    def pintar(self):
+        self.pantalla.configure(
+            text=self.logica.texto,
+            fg_color="#c2185b" if self.logica.error else "#7b1fa2",
+            font=ctk.CTkFont(
+                family="Consolas",
+                size=14 if self.logica.error else 26,
+                weight="bold",
+            ),
+        )
+        self.historial.configure(text=self.logica.historial_texto)
+
+    def pulsar_tecla(self, evento):
+        k = evento.keysym
+        C = self.logica
+        if k in "0123456789":
+            C.escribir(k)
+        elif k in ("period", "KP_Decimal"):
+            C.escribir(".")
+        elif k in ("plus", "K_Add"):
+            C.calc("+")
+        elif k in ("minus", "K_Subtract"):
+            C.calc("-")
+        elif k in ("asterisk", "K_Multiply"):
+            C.calc("*")
+        elif k in ("slash", "K_Divide"):
+            C.calc("/")
+        elif k in ("Return", "KP_Enter", "equal"):
+            C.resultado()
+        elif k == "BackSpace":
+            C.borrar()
+        elif k == "Escape":
+            C.limpiar()
+        else:
+            return
+        self.pintar()
+
+
+if __name__ == "__main__":
+    Calculadora().mainloop()

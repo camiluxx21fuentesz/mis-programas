@@ -1,0 +1,600 @@
+# Wrote camila_menu.py
+"""Calculadora Rosa & Morada con PySide6 y barra de menus.
+
+Todo corre en este mismo archivo.
+
+    pip install PySide6
+    python camila_menu.py
+"""
+import math
+import sys
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
+from PySide6.QtWidgets import (
+    QApplication,
+    QGridLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+)
+
+
+class Calculo:
+    """La logica de la calculadora, sin dependencias de la ventana."""
+
+    SIMBOLOS = {"+": "+", "-": "-", "*": "\u00d7", "/": "\u00f7"}
+    MAX_HISTORIAL = 5
+
+    def __init__(self):
+        self.actual = "0"      # el numero que se esta escribiendo
+        self.anterior = None   # operando izquierdo
+        self.operador = None   # + - * /
+        self.reiniciar = False # el proximo digito empieza un numero nuevo
+        self.error = None
+        self.vista = None      # texto a mostrar con el operador pendiente
+        self.historial = []    # ultimas operaciones, la mas reciente al final
+
+    @property
+    def texto(self):
+        if self.error:
+            return self.error
+        return self.actual if self.vista is None else self.vista
+
+    @property
+    def historial_texto(self):
+        """Historial para pintar, con la operacion mas reciente arriba."""
+        return "\n".join(reversed(self.historial))
+
+    def escribir(self, n):
+        if len(n) != 1 or n not in "0123456789.":
+            return self
+        if self.error:
+            self.limpiar()
+        self.vista = None
+        if self.reiniciar or (self.actual == "0" and n != "."):
+            self.actual = n
+            self.reiniciar = False
+        elif n == "." and "." in self.actual:
+            return self
+        else:
+            self.actual += n
+        return self
+
+    def calc(self, op):
+        if self.error:
+            return self
+        self.vista = None
+        if self.operador is not None and not self.reiniciar:
+            if not self.calcular():
+                return self
+        self.anterior = float(self.actual)
+        self.operador = op
+        self.reiniciar = True
+        self.vista = self.redondear(self.anterior) + " " + self.SIMBOLOS[op]
+        return self
+
+    def calcular(self):
+        """Ejecuta la operacion pendiente. Devuelve False si hubo error."""
+        if self.anterior is None or self.operador is None:
+            return True
+
+        b = float(self.actual)
+        op = self.operador
+        a = self.anterior
+        self.anterior = None
+        self.operador = None
+
+        if op == "/" and b == 0:
+            self.error = "!ERROR! No se puede dividir entre 0"
+            return False
+
+        try:
+            if op == "+":
+                r = a + b
+            elif op == "-":
+                r = a - b
+            elif op == "*":
+                r = a * b
+            else:
+                r = a / b
+            self.actual = self.redondear(r)
+        except (ValueError, ZeroDivisionError, OverflowError):
+            self.error = "!ERROR! Operacion no valida"
+            return False
+        self.anotar(a, op, b)
+        return True
+
+    def _empujar(self, linea):
+        """Agrega una linea al historial dejando solo las ultimas 5."""
+        self.historial.append(linea)
+        # OJO: con del h[:-MAX] cuando len(h) <= MAX el slice es vacio
+        # y se borraria todo el historial. Hay que recortar la lista entera.
+        if len(self.historial) > self.MAX_HISTORIAL:
+            del self.historial[: -self.MAX_HISTORIAL]
+
+    def anotar(self, a, op, b):
+        """Guarda el resultado de una operacion binaria: 2 + 3 = 5."""
+        self._empujar(
+            "{} {} {} = {}".format(
+                self.redondear(a), self.SIMBOLOS[op], self.redondear(b), self.actual
+            )
+        )
+
+    def anotar_simple(self, etiqueta, antes):
+        """Guarda el resultado de una operacion unaria: raiz 16 = 4."""
+        self._empujar("{} {} = {}".format(etiqueta, antes, self.actual))
+
+    def resultado(self):
+        if self.error:
+            return self
+        self.vista = None
+        self.calcular()
+        self.reiniciar = True
+        return self
+
+    def raiz(self):
+        return self.aplicar(
+            math.sqrt, "!ERROR! Raiz de numero negativo",
+            solo_positivo=True, etiqueta="raiz",
+        )
+
+    def porcentaje(self):
+        return self.aplicar(lambda n: n / 100, etiqueta="%")
+
+    def signo(self):
+        return self.aplicar(lambda n: -n, etiqueta="\u00b1")
+
+    def aplicar(self, f, mensaje_error=None, solo_positivo=False, etiqueta=None):
+        """Aplica f al numero actual, con guarda de errores."""
+        if self.error:
+            return self
+        try:
+            n = float(self.actual)
+        except ValueError:
+            self.error = "!ERROR! Numero no valido"
+            return self
+        if solo_positivo and n < 0:
+            self.error = mensaje_error
+            return self
+        try:
+            self.actual = self.redondear(f(n))
+        except (ValueError, OverflowError):
+            self.error = mensaje_error or "!ERROR! Resultado no valido"
+            return self
+        self.vista = None
+        self.reiniciar = True
+        if etiqueta:
+            self.anotar_simple(etiqueta, self.redondear(n))
+        return self
+
+    def borrar(self):
+        if self.error:
+            return self.limpiar()
+        if self.vista is not None:
+            self.vista = None
+            return self
+        self.actual = self.actual[:-1] if len(self.actual) > 1 else "0"
+        if self.actual in ("", "-", "."):
+            self.actual = "0"
+        return self
+
+    def limpiar(self):
+        """Borra la cuenta en curso. El historial se conserva."""
+        historial = self.historial
+        self.__init__()
+        self.historial = historial
+        return self
+
+    def borrar_historial(self):
+        self.historial = []
+        return self
+
+    @staticmethod
+    def redondear(n):
+        if not math.isfinite(n):
+            raise ValueError("resultado infinito")
+        r = round(n, 10)
+        return str(int(r)) if r == int(r) else str(r)
+
+
+FONDO = "#c77dff"
+PANEL = "#f7e6ff"
+TITULO = "#7b1fa2"
+PANTALLA = "#7b1fa2"
+TINTAPANTALLA = "#ffe6f5"
+ERROR = "#c2185b"
+TINTAHIST = "#6a1b9a"
+TINTAHIST_VACIO = "#8e24aa"
+# Sobre el fondo rosa #c77dff este morado da 5.4:1 de contraste (WCAG AA).
+TINTA_CREDITO = "#380d6e"
+
+# Colores escolhidos para que el texto tenga al menos 4.5:1 de contraste.
+ESTILO_BOTON = {
+    "num":     "background:#ff9ce0; color:#4a148c;",
+    "op":      "background:#9e40ae; color:#fff3fb;",
+    "igual":   "background:#6a1b9a; color:#ffffff;",
+    "limpiar": "background:#cc1857; color:#ffffff;",
+}
+HOVER_BOTON = {
+    "num":     "#d81b60",
+    "op":      "#7b1fa2",
+    "igual":   "#4a148c",
+    "limpiar": "#b01248",
+}
+
+FUENTE = "Segoe UI"
+
+
+class Ventana(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.c = Calculo()
+        self.tam = 1.0
+
+        self.setWindowTitle("Calculadora Rosa & Morada")
+        self.setFixedSize(400, 660)
+        self.setStyleSheet(
+            "QMainWindow { background:%s; }"
+            "QMenuBar { background:#f7e6ff; color:#4a148c; font-weight:600; }"
+            "QMenuBar::item:selected { background:#ff9ce0; }"
+            "QMenu { background:#f7e6ff; color:#4a148c; }"
+            "QMenu::item:selected { background:#ff9ce0; }"
+            "QStatusBar { background:#f7e6ff; color:#4a148c; }" % FONDO
+        )
+
+        self.central = QWidget()
+        self.setCentralWidget(self.central)
+        self.caja = QVBoxLayout(self.central)
+        self.caja.setContentsMargins(12, 10, 12, 10)
+        self.caja.setSpacing(8)
+
+        self.etiqueta = QLabel("  Calculadora Rosa & Morada")
+        self.etiqueta.setStyleSheet(
+            "color:%s; font-family:'%s'; font-size:14px; font-weight:700;" % (TITULO, FUENTE)
+        )
+        self.caja.addWidget(self.etiqueta)
+
+        # Pantalla: se puede seleccionar y copiar, no se escribe a mano
+        # porque el teclado ya alimenta la calculadora.
+        self.pantalla = QLineEdit("0")
+        self.pantalla.setReadOnly(True)
+        self.pantalla.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.pantalla.setMinimumHeight(58)
+        self.pantalla.setStyleSheet(
+            "QLineEdit { background:%s; color:%s; border:2px solid #4a148c;"
+            " border-radius:14px; font-family:'%s'; font-weight:700; }"
+            % (PANTALLA, TINTAPANTALLA, FUENTE)
+        )
+        self.caja.addWidget(self.pantalla)
+
+        # Historial: las ultimas 5 operaciones, la mas reciente arriba.
+        self.historial = QLabel("")
+        self.historial.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        self.historial.setMinimumHeight(96)
+        self.historial.setWordWrap(False)
+        self.caja.addWidget(self.historial)
+
+        self.rejilla = QGridLayout()
+        self.rejilla.setSpacing(6)
+        self.caja.addLayout(self.rejilla)
+
+        # Credito del autor, en el rincon de abajo a la derecha.
+        self.credito = QLabel("Creado por Camil Fuentes")
+        self.credito.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.credito.setStyleSheet(
+            "color:%s; font-family:'%s'; font-size:9pt;" % (TINTA_CREDITO, FUENTE)
+        )
+        self.caja.addWidget(self.credito)
+
+        self._crear_botones()
+        self._crear_menus()
+
+        self.statusBar().showMessage("F1 para ver los atajos de teclado")
+        self.aplicar_tamano()
+        self.pintar()
+
+    # ------------------------------------------------------------------
+    # botones
+    # ------------------------------------------------------------------
+    def _crear_botones(self):
+        self.botones = {}
+
+        def poner(texto, estilo, fila, col, accion, tip=""):
+            b = self._nuevo_boton(texto, estilo, tip)
+            b.clicked.connect(accion)
+            self.rejilla.addWidget(b, fila, col)
+            self.botones[texto] = b
+            return b
+
+        def dig(n):
+            return lambda: self.hacer(lambda: self.c.escribir(n))
+
+        def op(sim):
+            return lambda: self.hacer(lambda: self.c.calc(sim))
+
+        poner("AC", "limpiar", 0, 0,
+              lambda: self.hacer(lambda: (self.c.limpiar(), self.c.borrar_historial())),
+              "Borra la cuenta y el historial")
+        poner("\u221a", "op", 0, 1, lambda: self.hacer(self.c.raiz), "Raiz cuadrada")
+        poner("%", "op", 0, 2, lambda: self.hacer(self.c.porcentaje), "Porcentaje")
+
+        for i, n in enumerate("789"):
+            poner(n, "num", 1 + i // 3, i % 3, dig(n))
+        for i, n in enumerate("456"):
+            poner(n, "num", 2 + i // 3, i % 3, dig(n))
+        for i, n in enumerate("123"):
+            poner(n, "num", 3 + i // 3, i % 3, dig(n))
+
+        poner("0", "num", 4, 0, dig("0"))
+        poner(".", "num", 4, 1, dig("."), "Punto decimal")
+        poner("\u00b1", "op", 4, 2, lambda: self.hacer(self.c.signo), "Cambia el signo")
+
+        poner("\u00f7", "op", 5, 0, op("/"), "Dividir")
+        poner("\u00d7", "op", 5, 1, op("*"), "Multiplicar")
+        poner("+", "op", 5, 2, op("+"), "Sumar")
+        poner("\u2212", "op", 6, 0, op("-"), "Restar")
+        poner("C", "limpiar", 6, 1,
+              lambda: self.hacer(self.c.limpiar), "Borra la cuenta, conserva el historial")
+        poner("=", "igual", 6, 2,
+              lambda: self.hacer(self.c.resultado), "Resultado")
+
+        for col in range(3):
+            self.rejilla.setColumnStretch(col, 1)
+        for fila in range(7):
+            self.rejilla.setRowStretch(fila, 1)
+
+    def _nuevo_boton(self, texto, estilo, tip=""):
+        from PySide6.QtWidgets import QPushButton
+
+        b = QPushButton(texto)
+        # tamano fijo para que los 21 botones queden iguales
+        b.setFixedSize(120, 56)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setFocusPolicy(Qt.NoFocus)
+        if tip:
+            b.setToolTip(tip)
+        self.aplicar_estilo(b, estilo)
+        return b
+
+    def aplicar_estilo(self, b, estilo):
+        base = ESTILO_BOTON[estilo]
+        peso = "700" if estilo == "igual" else "600"
+        b.setStyleSheet(
+            "QPushButton { %s border:none; border-radius:14px;"
+            " font-family:'%s'; font-size:%dpx; font-weight:%s; }"
+            "QPushButton:hover  { background:%s; }"
+            "QPushButton:pressed{ background:%s; }"
+            % (base, FUENTE, int(19 * self.tam), peso,
+               HOVER_BOTON[estilo], HOVER_BOTON[estilo])
+        )
+
+    # ------------------------------------------------------------------
+    # menus
+    # ------------------------------------------------------------------
+    def _accion(self, menu, texto, atajo, conectar, chequeable=False, marcado=False):
+        a = QAction(texto, self)
+        if atajo:
+            a.setShortcut(QKeySequence(atajo))
+        if chequeable:
+            a.setCheckable(True)
+            a.setChecked(marcado)
+        a.triggered.connect(conectar)
+        menu.addAction(a)
+        return a
+
+    def _crear_menus(self):
+        barra = self.menuBar()
+
+        archivo = barra.addMenu("&Archivo")
+        self._accion(archivo, "&Nueva cuenta", "Ctrl+N", self.nueva_cuenta)
+        self._accion(archivo, "Borrar &historial", "Ctrl+Shift+K", self.borrar_historial)
+        archivo.addSeparator()
+        self._accion(archivo, "&Salir", "Ctrl+Q", self.close)
+
+        editar = barra.addMenu("&Editar")
+        self._accion(editar, "&Copiar resultado", "Ctrl+C", self.copiar_resultado)
+        self._accion(editar, "Copiar &historial", "Ctrl+Shift+C", self.copiar_historial)
+        self._accion(editar, "&Pegar numero", "Ctrl+V", self.pegar_numero)
+        editar.addSeparator()
+        self._accion(editar, "Borrar &ultimo digito", "Backspace", self.borrar_digito)
+        self._accion(editar, "&Limpiar cuenta", "Esc", self.limpiar_cuenta)
+
+        ver = barra.addMenu("&Ver")
+        self.accion_historial = self._accion(
+            ver, "Mostrar &historial", "Ctrl+H", self.alternar_historial,
+            chequeable=True, marcado=True,
+        )
+        ver.addSeparator()
+        self._accion(ver, "&Ampliar texto", "Ctrl+=", lambda: self.cambiar_tamano(0.1))
+        self._accion(ver, "&Reducir texto", "Ctrl+-", lambda: self.cambiar_tamano(-0.1))
+        self._accion(ver, "Texto &normal", "Ctrl+0", lambda: self.fijar_tamano(1.0))
+
+        ayuda = barra.addMenu("A&yuda")
+        self._accion(ayuda, "&Atajos de teclado", "F1", self.ver_atajos)
+        self._accion(ayuda, "&Acerca de", None, self.ver_acerca)
+
+    # ------------------------------------------------------------------
+    # acciones de los menus
+    # ------------------------------------------------------------------
+    def nueva_cuenta(self):
+        self.c.limpiar()
+        self.c.borrar_historial()
+        self.pintar()
+
+    def borrar_historial(self):
+        self.c.borrar_historial()
+        self.pintar()
+
+    def copiar_resultado(self):
+        QGuiApplication.clipboard().setText(self.c.actual)
+        self.statusBar().showMessage("Resultado copiado: %s" % self.c.actual, 2500)
+
+    def copiar_historial(self):
+        QGuiApplication.clipboard().setText(self.c.historial_texto)
+        self.statusBar().showMessage("Historial copiado", 2500)
+
+    def pegar_numero(self):
+        texto = QGuiApplication.clipboard().text().strip().replace(",", ".")
+        if not texto:
+            return
+        limpio = "".join(c for c in texto if c.isdigit() or c == ".")
+        if not limpio:
+            self.statusBar().showMessage("El portapapeles no tiene un numero", 2500)
+            return
+        self.hacer(lambda: self._pegar(limpio))
+
+    def _pegar(self, limpio):
+        if "." in limpio:
+            entero, _, decimal = limpio.partition(".")
+            limpio = entero + "." + decimal[:4]
+        for c in limpio:
+            self.c.escribir(c)
+
+    def borrar_digito(self):
+        self.hacer(self.c.borrar)
+
+    def limpiar_cuenta(self):
+        self.hacer(self.c.limpiar)
+
+    def alternar_historial(self, marcado):
+        self.historial.setVisible(bool(marcado))
+
+    def cambiar_tamano(self, delta):
+        self.fijar_tamano(self.tam + delta)
+
+    def fijar_tamano(self, valor):
+        self.tam = max(0.7, min(2.0, round(valor, 2)))
+        self.aplicar_tamano()
+        self.statusBar().showMessage("Tamano del texto: %d%%" % round(self.tam * 100), 2000)
+
+    def aplicar_tamano(self):
+        fuente = self.pantalla.font()
+        fuente.setFamily(FUENTE)
+        fuente.setPointSize(int(20 * self.tam))
+        fuente.setBold(True)
+        self.pantalla.setFont(fuente)
+
+        fuente = self.historial.font()
+        fuente.setFamily(FUENTE)
+        fuente.setPointSize(int(10 * self.tam))
+        self.historial.setFont(fuente)
+
+        fuente = self.etiqueta.font()
+        fuente.setFamily(FUENTE)
+        fuente.setPointSize(int(10 * self.tam))
+        fuente.setBold(True)
+        self.etiqueta.setFont(fuente)
+
+        for texto, b in self.botones.items():
+            estilo = "igual" if texto == "=" else (
+                "limpiar" if texto in ("AC", "C") else (
+                    "num" if texto in "0123456789." else "op"))
+            self.aplicar_estilo(b, estilo)
+
+    def ver_atajos(self):
+        QMessageBox.information(
+            self,
+            "Atajos de teclado",
+            "<b>Numeros</b>  0 - 9<br>"
+            "<b>Punto</b>  . o coma<br>"
+            "<b>Operaciones</b>  + - * /<br>"
+            "<b>Resultado</b>  Intro<br>"
+            "<b>Borrar digito</b>  Retroceso<br>"
+            "<b>Limpiar cuenta</b>  Esc<br><br>"
+            "<b>Tambien desde los menus:</b><br>"
+            "Ctrl+N nueva cuenta &nbsp; Ctrl+Shift+K borrar historial<br>"
+            "Ctrl+C copiar resultado &nbsp; Ctrl+Shift+C copiar historial<br>"
+            "Ctrl+V pegar numero &nbsp; Ctrl+H mostrar/ocultar historial<br>"
+            "Ctrl+= / Ctrl+- / Ctrl+0 tamano del texto",
+        )
+
+    def ver_acerca(self):
+        QMessageBox.about(
+            self,
+            "Acerca de",
+            "<h3>Calculadora Rosa &amp; Morada</h3>"
+            "<p>Hecha con PySide6.</p>"
+            "<p>Historial de las ultimas %d operaciones.</p>"
+            "<p>Colores con contraste minimo 4.5:1 (WCAG AA).</p>"
+            "<p><b>Creado por Camil Fuentes</b></p>" % Calculo.MAX_HISTORIAL,
+        )
+
+    # ------------------------------------------------------------------
+    # logica de la interfaz
+    # ------------------------------------------------------------------
+    def hacer(self, accion):
+        accion()
+        self.pintar()
+
+    def pintar(self):
+        if self.c.error:
+            self.pantalla.setText(self.c.texto)
+            self.pantalla.setStyleSheet(
+                "QLineEdit { background:%s; color:#ffffff; border:2px solid #4a148c;"
+                " border-radius:14px; font-family:'%s'; font-weight:700; }"
+                % (ERROR, FUENTE)
+            )
+        else:
+            self.pantalla.setText(self.c.texto)
+            self.pantalla.setStyleSheet(
+                "QLineEdit { background:%s; color:%s; border:2px solid #4a148c;"
+                " border-radius:14px; font-family:'%s'; font-weight:700; }"
+                % (PANTALLA, TINTAPANTALLA, FUENTE)
+            )
+
+        texto = self.c.historial_texto
+        if texto:
+            self.historial.setText(texto)
+            self.historial.setStyleSheet(
+                "QLabel { background:%s; color:%s; border:none; border-radius:14px;"
+                " font-family:'%s'; padding:8px; }" % (PANEL, TINTAHIST, FUENTE)
+            )
+        else:
+            self.historial.setText("sin operaciones aun")
+            self.historial.setStyleSheet(
+                "QLabel { background:%s; color:%s; border:none; border-radius:14px;"
+                " font-family:'%s'; padding:8px; }" % (PANEL, TINTAHIST_VACIO, FUENTE)
+            )
+
+    def keyPressEvent(self, evento):
+        k = evento.key()
+        texto = evento.text()
+
+        if texto and texto in "0123456789":
+            self.hacer(lambda: self.c.escribir(texto))
+            return
+        if texto in (".", ","):
+            self.hacer(lambda: self.c.escribir("."))
+            return
+        if k in (Qt.Key_Plus, Qt.Key_Equal):
+            self.hacer(lambda: self.c.calc("+"))
+            return
+        if k == Qt.Key_Minus:
+            self.hacer(lambda: self.c.calc("-"))
+            return
+        if k == Qt.Key_Asterisk:
+            self.hacer(lambda: self.c.calc("*"))
+            return
+        if k == Qt.Key_Slash:
+            self.hacer(lambda: self.c.calc("/"))
+            return
+        if k in (Qt.Key_Return, Qt.Key_Enter):
+            self.hacer(self.c.resultado)
+            return
+        super().keyPressEvent(evento)
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("Calculadora Rosa & Morada")
+    ventana = Ventana()
+    ventana.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
